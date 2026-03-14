@@ -90,6 +90,8 @@ type App interface {
 }
 
 type Application struct {
+	resultChanMapMu sync.RWMutex
+	
 	conn  cast.Conn
 	debug bool
 
@@ -284,7 +286,11 @@ func (a *Application) recvMessages() {
 	for msg := range a.conn.MsgChan() {
 		requestID, err := jsonparser.GetInt([]byte(*msg.PayloadUtf8), "requestId")
 		if err == nil {
-			if resultChan, ok := a.resultChanMap[int(requestID)]; ok {
+			a.resultChanMapMu.RLock()  // Add read lock
+			resultChan, ok := a.resultChanMap[int(requestID)]
+			a.resultChanMapMu.RUnlock()  // Add read unlock
+			
+			if ok {
 				resultChan <- msg
 				// Relay the event to any user specified message funcs.
 				a.messageChan <- msg
@@ -1277,9 +1283,14 @@ func (a *Application) sendAndWait(payload cast.Payload, sourceID, destinationID,
 	// TODO(vishen): not concurrent safe. Not a problem at the moment
 	// because only synchronous flow currently allowed.
 	resultChan := make(chan *pb.CastMessage, 1)
+	a.resultChanMapMu.Lock()  // Add lock
 	a.resultChanMap[requestID] = resultChan
+	a.resultChanMapMu.Unlock()  // Add unlock
+	
 	defer func() {
+		a.resultChanMapMu.Lock()  // Add lock
 		delete(a.resultChanMap, requestID)
+		a.resultChanMapMu.Unlock()  // Add unlock
 	}()
 
 	select {
